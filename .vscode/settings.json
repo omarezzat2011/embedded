@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "rfid.h": "c",
+        "buzzer.h": "c",
+        "ultrasonic.h": "c",
+        "lcd.h": "c"
+    }
+}
