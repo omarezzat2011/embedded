@@ -72,7 +72,6 @@ void rfid_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(2000)); // Check for cards every 2 seconds
     }
 }
-
 // Task: IR and Ultrasonic Sensors
 void sensor_task(void *pvParameters) {
     // Initialize IR Sensor
