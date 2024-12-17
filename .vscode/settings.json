@@ -3,6 +3,8 @@
         "rfid.h": "c",
         "buzzer.h": "c",
         "ultrasonic.h": "c",
-        "lcd.h": "c"
+        "lcd.h": "c",
+        "stdlib.h": "c",
+        "spi.h": "c"
     }
 }

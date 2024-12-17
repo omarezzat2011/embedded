@@ -17,6 +17,7 @@
 #include "../include/hardware/gpio.h"
 #include "pwm.h"
 #include <string.h>
+#include <semphr.h>
 
 #define BUZZER_PIN 26      // Buzzer GPIO pin
 #define SERVO_PIN 20       // Servo GPIO pin
@@ -35,116 +36,115 @@
 // Global variables for shared data
 volatile bool access_granted = false;
 volatile float distance = 0.0f;
+// Global variables for synchronization
+static bool servo_trigger = false;
+static SemaphoreHandle_t servo_mutex = NULL;
 
-// Task: RFID and Servo Control
-void rfid_task(void *pvParameters) {
-    // Initialize RFID
+
+void all_task(void *pvParameters) {
+    // init part
     MFRC522Ptr_t mfrc;
-    rfid_init(&mfrc);
-
-    // Initialize Servo
-    servo_init(SERVO_PIN);
-
     uint8_t uid[10];
     uint8_t uid_length;
-
-    for (;;) {
-        printf("Waiting for RFID card...\n");
-
-        if (card_present(&mfrc)) {
-            if (read_card_uid(&mfrc, uid, &uid_length)) {
-                printf("Card detected!\n");
-
-                if (uid_length == 4 && uid[0] == 0x07 && uid[1] == 0x20 && uid[2] == 0xD1 && uid[3] == 0x26) {
-                    printf("Access Granted\n");
-                    access_granted = true;
-
-                    rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Open the gate
-                    vTaskDelay(pdMS_TO_TICKS(5000)); // Keep gate open for 5 seconds
-                    rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Close the gate
-                } else {
-                    printf("Access Denied\n");
-                    access_granted = false;
-                }
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(2000)); // Check for cards every 2 seconds
-    }
-}
-// Task: IR and Ultrasonic Sensors
-void sensor_task(void *pvParameters) {
-    // Initialize IR Sensor
-    ir_sensor_init_adc(IR_SENSOR_ADC_PIN);
-
-    // Initialize Ultrasonic Sensor
-    hc_sr04_init(TRIG_PIN, ECHO_PIN);
-
-    for (;;) {
-        // Read IR Sensor
-        uint16_t ir_raw_value = ir_sensor_read_adc();
-        float ir_voltage = ir_sensor_get_voltage(ir_raw_value);
-
-        if (ir_voltage > 3.3 || ir_voltage < 0) {
-            printf("Invalid IR Reading\n");
-        } else {
-            printf("IR Voltage: %.2fV\n", ir_voltage);
-        }
-
-        // Read Ultrasonic Sensor
-        distance = measure_distance(TRIG_PIN, ECHO_PIN);
-        if (distance < 0) {
-            printf("No Object Detected\n");
-        } else {
-            printf("Ultrasonic Distance: %.2f cm\n", distance);
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(2000)); // Delay for 2 seconds
-    }
-}
-
-// Task: LCD Display
-void lcd_task(void *pvParameters) {
-    // Initialize LCD
+    char rfid_message[32];
+        // Initialize the LCD
     lcd_init();
 
-    for (;;) {
+    rfid_init(&mfrc);
+    buzzer_init(BUZZER_PIN);
+    servo_init(SERVO_PIN);
+    ir_sensor_init_adc(IR_SENSOR_ADC_PIN);
+
+    hc_sr04_init(TRIG_PIN, ECHO_PIN);
+    // Display a ready message on the LCD
+    lcd_send_byte(LCD_CLEAR, true);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    lcd_print("System Ready!");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    lcd_send_byte(LCD_CLEAR, true);
+
+
+
+
+   while (1) {
+        lcd_send_byte(LCD_CLEAR, true);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        lcd_print("Scan RFID Card!");
+        vTaskDelay(pdMS_TO_TICKS(2000));
         lcd_send_byte(LCD_CLEAR, true);
 
-        if (access_granted) {
-            lcd_print("Access Granted");
-        } else {
-            char dist_message[32];
-            snprintf(dist_message, sizeof(dist_message), "Dist: %.2f cm", distance);
-            lcd_print(dist_message);
-        }
+       if (card_present(mfrc)) {
+        if (read_card_uid(mfrc, uid, &uid_length)) {
+            // Format the UID as a string for display
+            char uid_str[30];
+            sprintf(uid_str, "UID: ");
+            for (uint8_t i = 0; i < uid_length; i++) {
+                sprintf(uid_str + strlen(uid_str), "%02X ", uid[i]); // Append each byte in hex
+            }
+            lcd_send_byte(LCD_CLEAR, true);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            lcd_print(uid_str);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            lcd_send_byte(LCD_CLEAR, true);
+            if (uid_length == 4 && uid[0] == 0x07 && uid[1] == 0x20 && uid[2] == 0xD1 && uid[3] == 0x26) {
+                // Matched UID - Play accessible sound
+                printf("Access Granted. Playing success tone...\n");
+                uint16_t ir_raw_value = ir_sensor_read_adc();
+                float ir_voltage = ir_sensor_get_voltage(ir_raw_value);
 
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Update every 1 second
+                char ir_message[32];
+                if (ir_voltage > 3.3 || ir_voltage < 0) {
+                    strcpy(ir_message, "Invalid IR");
+                } else {
+                    if(ir_voltage < 1.5){
+                        buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
+                    }else{    
+                        buzzer_play_tone(BUZZER_PIN, 1000, 1000); // 1kHz tone for 500ms
+                        rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                        float distance = measure_distance(TRIG_PIN, ECHO_PIN);
+                        char us_message[32];
+                        if (distance < 0) {
+                            sprintf(us_message, "No Obj Detected");
+                            printf("Ultrasonic: Timeout! No object detected.\n");
+                        } else {
+                            sprintf(us_message, "Dist: %.2fcm", distance);
+                            printf("Ultrasonic: %.2f cm\n", distance);
+                        }
+                        lcd_send_byte(LCD_CLEAR, true);
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        lcd_print(uid_str);
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                        lcd_send_byte(LCD_CLEAR, true);
+                        while(distance>10||distance<0){
+                            distance = measure_distance(TRIG_PIN, ECHO_PIN);
+                        }
+                        buzzer_play_tone(BUZZER_PIN, 1500, 1000); // 1kHz tone for 500ms
+                        rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                    }
+                }
+            } else {
+                // Unmatched UID - Play non-accessible sound
+                printf("Access Denied. Playing error tone...\n");
+                buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
+            }
+           sleep_ms(5000);
+
+        }
     }
+    }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    
+
 }
 
-// Task: Buzzer Control
-void buzzer_task(void *pvParameters) {
-    // Initialize Buzzer
-    buzzer_init(BUZZER_PIN);
-
-    for (;;) {
-        if (access_granted) {
-            buzzer_play_tone(BUZZER_PIN, 1000, 500); // 1kHz tone for 500ms
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(3000)); // Check every 3 seconds
-    }
-}
 
 int main() {
     stdio_init_all(); // Initialize stdio for debugging
+    
 
     // Create tasks
-    xTaskCreate(rfid_task, "RFID Task", 1024, NULL, 1, NULL);
-    xTaskCreate(sensor_task, "Sensor Task", 1024, NULL, 1, NULL);
-    xTaskCreate(lcd_task, "LCD Task", 1024, NULL, 1, NULL);
-    xTaskCreate(buzzer_task, "Buzzer Task", 512, NULL, 1, NULL);
+    xTaskCreate(all_task, "RFID and Sensor Task", 8192, NULL, 1, NULL);
+  
 
     // Start FreeRTOS scheduler
     vTaskStartScheduler();
