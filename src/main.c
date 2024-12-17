@@ -32,13 +32,6 @@
 #define MISO_PIN 4 // D12
 #define RST_PIN 5  // D10
 
-
-// Global variables for shared data
-volatile bool access_granted = false;
-volatile float distance = 0.0f;
-// Global variables for synchronization
-static bool servo_trigger = false;
-static SemaphoreHandle_t servo_mutex = NULL;
 // Buzzer States
 typedef enum {
     NOT_PLAYING,
