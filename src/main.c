@@ -38,54 +38,80 @@ volatile bool access_granted = false;
 volatile float distance = 0.0f;
 // Global variables for synchronization
 static bool servo_trigger = false;
-static SemaphoreHandle_t servo_mutex = NULL;
 
+static SemaphoreHandle_t lcd_mutex;
+
+MFRC522Ptr_t mfrc;
+uint8_t uid[10];
+uint8_t uid_length;
+char rfid_message[32];
+bool rfid_scanned = false;  // Synchronization flag
+
+
+void display_task(void *pvParameters) {
+    // Initialization
+    lcd_init();
+    if (xSemaphoreTake(lcd_mutex, portMAX_DELAY)) {
+
+        // Display a ready message on the LCD
+        lcd_send_byte(LCD_CLEAR, true);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        lcd_print("System Ready!");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        lcd_send_byte(LCD_CLEAR, true);
+        xSemaphoreGive(lcd_mutex);
+
+    }
+
+    while (1) {
+        // Wait until RFID scanning is required
+        if (!rfid_scanned) {
+            if (xSemaphoreTake(lcd_mutex, portMAX_DELAY)) {
+                lcd_send_byte(LCD_CLEAR, true);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                lcd_print("Scan RFID Card!");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                lcd_send_byte(LCD_CLEAR, true);
+                xSemaphoreGive(lcd_mutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));  // Small delay for task scheduling
+    }
+}
 
 void all_task(void *pvParameters) {
-    // init part
-    MFRC522Ptr_t mfrc;
-    uint8_t uid[10];
-    uint8_t uid_length;
-    char rfid_message[32];
+  
         // Initialize the LCD
     lcd_init();
-
     rfid_init(&mfrc);
     buzzer_init(BUZZER_PIN);
     servo_init(SERVO_PIN);
     ir_sensor_init_adc(IR_SENSOR_ADC_PIN);
 
     hc_sr04_init(TRIG_PIN, ECHO_PIN);
-    // Display a ready message on the LCD
-    lcd_send_byte(LCD_CLEAR, true);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    lcd_print("System Ready!");
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    lcd_send_byte(LCD_CLEAR, true);
-
-
 
 
    while (1) {
-        lcd_send_byte(LCD_CLEAR, true);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        lcd_print("Scan RFID Card!");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        lcd_send_byte(LCD_CLEAR, true);
-
        if (card_present(mfrc)) {
         if (read_card_uid(mfrc, uid, &uid_length)) {
+            rfid_scanned = true;
+
             // Format the UID as a string for display
             char uid_str[30];
             sprintf(uid_str, "UID: ");
             for (uint8_t i = 0; i < uid_length; i++) {
                 sprintf(uid_str + strlen(uid_str), "%02X ", uid[i]); // Append each byte in hex
             }
-            lcd_send_byte(LCD_CLEAR, true);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            lcd_print(uid_str);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            lcd_send_byte(LCD_CLEAR, true);
+            if (xSemaphoreTake(lcd_mutex, portMAX_DELAY)) {
+
+                lcd_send_byte(LCD_CLEAR, true);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                lcd_print(uid_str);
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                lcd_send_byte(LCD_CLEAR, true);
+                xSemaphoreGive(lcd_mutex);
+
+            }
             if (uid_length == 4 && uid[0] == 0x07 && uid[1] == 0x20 && uid[2] == 0xD1 && uid[3] == 0x26) {
                 // Matched UID - Play accessible sound
                 printf("Access Granted. Playing success tone...\n");
@@ -110,11 +136,16 @@ void all_task(void *pvParameters) {
                             sprintf(us_message, "Dist: %.2fcm", distance);
                             printf("Ultrasonic: %.2f cm\n", distance);
                         }
-                        lcd_send_byte(LCD_CLEAR, true);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                        lcd_print(uid_str);
-                        vTaskDelay(pdMS_TO_TICKS(2000));
-                        lcd_send_byte(LCD_CLEAR, true);
+                        if (xSemaphoreTake(lcd_mutex, portMAX_DELAY)) {
+
+                            lcd_send_byte(LCD_CLEAR, true);
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                            lcd_print(uid_str);
+                            vTaskDelay(pdMS_TO_TICKS(2000));
+                            lcd_send_byte(LCD_CLEAR, true);
+                            xSemaphoreGive(lcd_mutex);
+
+                        }
                         while(distance>10||distance<0){
                             distance = measure_distance(TRIG_PIN, ECHO_PIN);
                         }
@@ -127,6 +158,8 @@ void all_task(void *pvParameters) {
                 printf("Access Denied. Playing error tone...\n");
                 buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
             }
+            rfid_scanned = false;  // Reset flag
+
            sleep_ms(5000);
 
         }
@@ -140,11 +173,16 @@ void all_task(void *pvParameters) {
 
 int main() {
     stdio_init_all(); // Initialize stdio for debugging
-    
+    // Initialize the mutex
+    lcd_mutex = xSemaphoreCreateMutex();
+    if (lcd_mutex == NULL) {
+        printf("Failed to create LCD mutex\n");
+        while (1);  // Halt
+    }
 
     // Create tasks
-    xTaskCreate(all_task, "RFID and Sensor Task", 8192, NULL, 1, NULL);
-  
+    xTaskCreate(display_task, "DisplayTask", 2048, NULL, 1, NULL);
+    xTaskCreate(all_task, "RFID and Sensor Task", 2048, NULL, 1, NULL);
 
     // Start FreeRTOS scheduler
     vTaskStartScheduler();
