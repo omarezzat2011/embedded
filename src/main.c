@@ -39,8 +39,66 @@ volatile float distance = 0.0f;
 // Global variables for synchronization
 static bool servo_trigger = false;
 static SemaphoreHandle_t servo_mutex = NULL;
+// Buzzer States
+typedef enum {
+    NOT_PLAYING,
+    PLAYING_SUCCESS_TONE,
+    PLAYING_CLOSE_TONE,
+    PLAYING_ERROR_TONE
+} buzzer_state_t;
+
+// Global Buzzer State
+volatile buzzer_state_t buzzer_state = NOT_PLAYING;  // Volatile ensures correct visibility across tasks
+// Buzzer States
+typedef enum {
+    CONSTANT,
+    OPENING,
+    CLOSING
+} servo_state_t;
+
+volatile servo_state_t servo_state = CONSTANT;  // Volatile ensures correct visibility across tasks
+
+void buzzer_task(void *pvParameters) {
+    while (1) {
+        // Check if the buzzer state is to play a sound
+        if (buzzer_state == PLAYING_SUCCESS_TONE) {
+            buzzer_play_tone(BUZZER_PIN, 1000, 1000); // Play 1kHz tone for 1 second
+            buzzer_state = NOT_PLAYING; // Reset the state
+        } 
+        else if (buzzer_state == PLAYING_ERROR_TONE) {
+            buzzer_play_tone(BUZZER_PIN, 500, 1000); // Play 500Hz tone for 1 second
+            buzzer_state = NOT_PLAYING; // Reset the state
+        }
+        else if ( buzzer_state == PLAYING_CLOSE_TONE ){
+            buzzer_play_tone(BUZZER_PIN, 1500, 1000); // 1.5kHz tone for 1000ms
+            buzzer_state = NOT_PLAYING; // Reset the state
 
 
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(200)); // Small delay to avoid busy-waiting
+    }
+}
+void servo_task(void *pvParameters) {
+    while (1) {
+        // Check if the buzzer state is to play a sound
+        if (servo_state == OPENING) {
+            open_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for servo to complete opening
+
+            servo_state = CONSTANT; // Reset the state
+        } 
+        else if (servo_state == CLOSING) {
+            close_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for servo to complete opening
+
+            servo_state = CONSTANT; // Reset the state
+        }
+       
+
+        vTaskDelay(pdMS_TO_TICKS(200)); // Small delay to avoid busy-waiting
+    }
+}
 void all_task(void *pvParameters) {
     // init part
     MFRC522Ptr_t mfrc;
@@ -97,10 +155,10 @@ void all_task(void *pvParameters) {
                     strcpy(ir_message, "Invalid IR");
                 } else {
                     if(ir_voltage < 1.5){
-                        buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
+                        buzzer_state = PLAYING_ERROR_TONE;  // Set state to play success tone
                     }else{    
-                        buzzer_play_tone(BUZZER_PIN, 1000, 1000); // 1kHz tone for 1 second
-                        open_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                        buzzer_state = PLAYING_SUCCESS_TONE;  // Set state to play success tone
+                        servo_state  = OPENING;
                         float distance = measure_distance(TRIG_PIN, ECHO_PIN);
                         char us_message[32];
                         if (distance < 0) {
@@ -118,14 +176,14 @@ void all_task(void *pvParameters) {
                         while(distance>10||distance<0){
                             distance = measure_distance(TRIG_PIN, ECHO_PIN);
                         }
-                        buzzer_play_tone(BUZZER_PIN, 1500, 1000); // 1.5kHz tone for 1000ms
-                        close_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                        buzzer_state = PLAYING_CLOSE_TONE;  // Set state to play success tone
+                        servo_state  = CLOSING;
                     }
                 }
             } else {
                 // Unmatched UID - Play non-accessible sound
                 printf("Access Denied. Playing error tone...\n");
-                buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
+                buzzer_state = PLAYING_ERROR_TONE;  // Set state to play success tone
             }
            sleep_ms(5000);
 
@@ -144,7 +202,9 @@ int main() {
 
     // Create tasks
     xTaskCreate(all_task, "RFID and Sensor Task", 8192, NULL, 1, NULL);
-  
+    xTaskCreate(buzzer_task, "Buzzer Task", 2048, NULL, 1, NULL);  
+    xTaskCreate(servo_task, "Servo Task", 2048, NULL, 1, NULL);  
+
 
     // Start FreeRTOS scheduler
     vTaskStartScheduler();
