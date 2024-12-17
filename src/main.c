@@ -100,7 +100,7 @@ void all_task(void *pvParameters) {
                         buzzer_play_tone(BUZZER_PIN, 500, 1000); // 500Hz tone for 1 second
                     }else{    
                         buzzer_play_tone(BUZZER_PIN, 1000, 1000); // 1kHz tone for 500ms
-                        rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                        open_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
                         float distance = measure_distance(TRIG_PIN, ECHO_PIN);
                         char us_message[32];
                         if (distance < 0) {
@@ -119,7 +119,7 @@ void all_task(void *pvParameters) {
                             distance = measure_distance(TRIG_PIN, ECHO_PIN);
                         }
                         buzzer_play_tone(BUZZER_PIN, 1500, 1000); // 1kHz tone for 500ms
-                        rotate_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
+                        close_servo(pwm_gpio_to_slice_num(SERVO_PIN)); // Rotate the servo
                     }
                 }
             } else {
